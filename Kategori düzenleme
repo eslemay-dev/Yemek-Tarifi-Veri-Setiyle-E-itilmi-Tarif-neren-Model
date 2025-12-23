@@ -1,0 +1,44 @@
+import re
+import pandas as pd
+import json
+
+
+with open("3000_Yemek_TarifiSonHal.txt", "r", encoding="utf-8") as f:
+    text = f.read()
+
+text = re.sub(r'[\u200b\u200c\u200d\uFEFF]', '', text)  # zero-width boşluklar
+text = text.replace('\xa0', ' ')  # non-breaking space → normal boşluk
+text = re.sub(r'\s+', ' ', text)  # fazla boşlukları sadeleştir
+text = text.strip()
+
+tarifler = re.split(r"\n(?=[A-ZÇĞİÖŞÜ].*? - \d+)", text)
+veriler = []
+
+for tarif in tarifler:
+    baslik = re.search(r"^(.*?)-\s*\d+", tarif)
+    sure = re.search(r"Süre:\s*([\w\s½¼]+)", tarif)
+    malzemeler = re.search(r"MALZEMELER(.*?)YAPILIŞ TARİFİ", tarif, re.S)
+    yapilis = re.search(r"YAPILIŞ TARİFİ(.*?)(?=\n[A-ZÇĞİÖŞÜ].*? - \d+|$)", tarif, re.S)
+
+    if not baslik or "None" in baslik.group(1):
+        continue
+
+    data = {
+        "baslik": baslik.group(1).strip(),
+        "malzemeler": malzemeler.group(1).strip().replace("\n", " ") if malzemeler else None,
+        "yapilis_tarifi": yapilis.group(1).strip().replace("\n", " ") if yapilis else None,
+        "pisirme_suresi": sure.group(1).strip() if sure else None
+    }
+
+    veriler.append(data)
+
+df = pd.DataFrame(veriler)
+df["baslik"] = df["baslik"].str.strip()
+df["malzemeler"] = df["malzemeler"].str.replace(r"\s+", " ", regex=True)
+df["yapilis_tarifi"] = df["yapilis_tarifi"].str.replace(r"\s+", " ", regex=True)
+
+json_path = "3000tarifler_temiz_antikod.json"
+with open(json_path, "w", encoding="utf-8") as f:
+    json.dump(df.to_dict(orient="records"), f, ensure_ascii=False, indent=4)
+
+print(f"{len(df)} tarif başarıyla {json_path} dosyasına kaydedildi! ")
