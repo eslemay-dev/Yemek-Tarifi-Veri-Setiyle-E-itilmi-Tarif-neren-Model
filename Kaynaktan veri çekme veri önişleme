@@ -1,0 +1,47 @@
+import re
+import json
+
+txt_path = r"C:\Users\eslem\OneDrive\Dokument\hesaplamaTeorisi\forDataSet\Dunya_Mutfagi_Beyaz_Et_Yemekleri.txt"
+json_path = r"C:\Users\eslem\OneDrive\Dokument\hesaplamaTeorisi\forDataSet\BeyazEtVeYemekler.json"
+
+with open(txt_path, "r", encoding="utf-8") as f:
+    text = f.read()
+
+text = re.sub(r"\s{2,}", " ", text)
+text = text.replace("\r", "").replace("\n ", "\n")
+
+recipes = re.split(r"DÜNYA MUTFAGI", text, flags=re.IGNORECASE)
+
+data = []
+for recipe in recipes:
+    if "MALZEMELER" not in recipe:
+        continue  # önsöz veya boş sayfalar atla
+
+    baslik_match = re.search(r"([A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü\s']{3,})\s*(?:v?\d+\s*Kişilik)?", recipe)
+    baslik = baslik_match.group(1).strip() if baslik_match else "Bilinmiyor"
+
+    # Pişirme süresini bul
+    pisirme_match = re.search(r"(?:P[iı]şirme|Pisirme|Fırında)[^:]*[:\-]?\s*([0-9\-–\s\w°Cdak\.]+)", recipe, re.IGNORECASE)
+    pisirme_suresi = pisirme_match.group(1).strip() if pisirme_match else "Belirtilmemiş"
+
+    # Malzeme kısmını al
+    malzeme_match = re.search(r"MALZEMELER([\s\S]*?)(?:SERVİS|AFİYET|DÜNYA MUTFAGI|$)", recipe, re.IGNORECASE)
+    if not malzeme_match:
+        continue
+    malzeme_text = malzeme_match.group(1).strip()
+    malzemeler = [
+        re.sub(r"^[\.\-•…\s]+", "", m.strip())
+        for m in re.split(r"\n| {3,}", malzeme_text)
+        if len(m.strip()) > 2
+    ]
+
+    data.append({
+        "baslik": baslik,
+        "pisirme_suresi": pisirme_suresi,
+        "malzemeler": malzemeler
+    })
+
+with open(json_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=4)
+
+print(f"{len(data)} tarif bulundu ve '{json_path}' dosyasına kaydedildi.")
