@@ -1,0 +1,58 @@
+import json
+import numpy as np
+import pandas as pd
+from datasets import Dataset #HuggingFace’in Trainer’la uyumlu veri yapısı
+from transformers import AutoTokenizer
+from torch.utils.data import DataLoader #veriyi batch batch modele verebilmek
+
+
+with open("llama_dataset.json", "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+texts = []
+#Model her şeyi tek bağlam olarak alır
+for item in data:
+    baslik = item.get("baslik", "")
+    tarif = item.get("yapilis_tarifi", "")
+    malzeme = item.get("malzemeler", "")
+    combined = f"{baslik} {tarif} {malzeme}"
+    texts.append({"text": combined})
+
+dataset = Dataset.from_list(texts) #trainer uyumlu hale geldi
+
+# Train / validation split
+dataset = dataset.train_test_split(test_size=0.1, shuffle=True, seed=42)
+train_data = dataset["train"]
+val_data = dataset["test"]
+
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-3B-Instruct")
+
+tokenizer.pad_token = tokenizer.eos_token
+
+def tokenize_function(example):
+    return tokenizer(
+        example["text"],
+        truncation=True, #tokenı aşarsa gereksiz kısıtlar kesilir
+        padding="max_length", #tüm örnekler aynı uzunlukta olmalı kısalar pad tokenle tamamlanmalı
+        max_length=2048,
+    )
+    tokens["labels"] = tokens["input_ids"].copy()
+    return tokens
+
+train_tokenized = train_data.map(tokenize_function, batched=True)
+val_tokenized = val_data.map(tokenize_function, batched=True) #train/val tokenize edildi
+
+
+train_loader = DataLoader(train_tokenized, batch_size=8, shuffle=True)
+val_loader = DataLoader(val_tokenized, batch_size=8) #veriyi 8li paketlere aldık
+
+
+print("Hazır!")
+batch = next(iter(train_loader))
+print("Train batch örneği:")
+for key, value in batch.items():
+    # Eğer liste ise uzunluğunu yaz
+    if isinstance(value, list):
+        print(key, len(value)) #liste ise uzunluğunu yazdırır
+    else:
+        print(key, value.shape) #tensor ise boyutunu yazdırır
