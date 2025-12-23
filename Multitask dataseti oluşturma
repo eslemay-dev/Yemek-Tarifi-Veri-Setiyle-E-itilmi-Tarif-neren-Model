@@ -1,0 +1,49 @@
+import json
+import random
+
+
+INPUT_FILE = "toplu_final.json"          # ham datasetin
+OUTPUT_FILE = "2llama_dataset_multitask.json"  # LoRA için oluşturulacak
+
+with open(INPUT_FILE, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+multitask_data = []
+
+for item in data:
+    baslik = item.get("baslik", "Bilinmeyen Yemek")
+    malzemeler = item.get("malzemeler", "")
+    yapilis = item.get("yapilis_tarifi", "")
+    pisirme_suresi = item.get("pisirme_suresi_dk", 30)  # default 30 dk
+
+    malzeme_sayisi = len(malzemeler.split())
+    tarif_uzunlugu = len(yapilis.split())
+    kategori = "çorba" if "çorba" in baslik.lower() else "yemek"
+    kalori = random.randint(150, 400)  # tahmini kalori
+
+    multitask_data.append({
+        "prompt": f"<|user|>\nPişirme süresi: {pisirme_suresi} dakika\nMalzeme sayısı: {malzeme_sayisi}\nTarif uzunluğu: {tarif_uzunlugu} kelime\nYemek adı: {baslik}\nGörev: Bu yemeğin kategorisini tahmin et.\n<|assistant|>",
+        "response": f"Kategori: {kategori}"
+    })
+
+    multitask_data.append({
+        "prompt": f"<|user|>\nPişirme süresi: {pisirme_suresi} dakika\nMalzeme sayısı: {malzeme_sayisi}\nTarif uzunluğu: {tarif_uzunlugu} kelime\nYemek adı: {baslik}\nGörev: Bu yemeğin yaklaşık kalorisini tahmin et.\n<|assistant|>",
+        "response": f"Kalori: {kalori}"
+    })
+
+    multitask_data.append({
+        "prompt": f"<|user|>\nPişirme süresi: {pisirme_suresi} dakika\nMalzeme sayısı: {malzeme_sayisi}\nTarif uzunluğu: {tarif_uzunlugu} kelime\nYemek adı: {baslik}\nGörev: Kategoriyi ve kaloriyi tahmin et.\n<|assistant|>",
+        "response": f"Kategori: {kategori}\nKalori: {kalori}"
+    })
+
+    multitask_data.append({
+        "prompt": f"<|user|>\nPişirme süresi: {pisirme_suresi} dakika\nMalzeme sayısı: {malzeme_sayisi}\nTarif uzunluğu: {tarif_uzunlugu} kelime\nYemek adı: {baslik}\nBu yemek hafif mi?\n<|assistant|>",
+        "response": f"Evet, bu yemek {kategori} kategorisindedir ve yaklaşık {kalori} kaloridir."
+    })
+
+random.shuffle(multitask_data)
+
+with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    json.dump(multitask_data, f, ensure_ascii=False, indent=2)
+
+print(f"Multi-task dataset hazır: {len(multitask_data)} kayıt")
