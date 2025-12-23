@@ -1,0 +1,146 @@
+# prompt + response
+# instruction format
+# label masking
+# LoRA task fine-tune
+
+import json
+import torch
+from datasets import Dataset
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    TrainingArguments,
+    Trainer,
+    DataCollatorForLanguageModeling
+)
+from peft import LoraConfig, get_peft_model
+
+with open("2llama_dataset_multitask.json", "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+dataset = Dataset.from_list(data)
+dataset = dataset.train_test_split(test_size=0.1, seed=42)
+
+train_data = dataset["train"]
+val_data = dataset["test"]
+
+print("Train:", len(train_data))
+print("Val:", len(val_data))
+
+model_name = "meta-llama/Llama-3.2-3B-Instruct"
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+tokenizer.pad_token = tokenizer.eos_token
+
+def tokenize_function(batch):
+    texts = []
+
+    for prompt, response in zip(batch["prompt"], batch["response"]):
+        text = (
+            "<|user|>\n"
+            + str(prompt)
+            + "\n<|assistant|>\n"
+            + str(response)
+        )
+        texts.append(text)
+
+    tokens = tokenizer(
+        texts,
+        truncation=True,
+        padding="max_length",
+        max_length=512,
+    )
+
+    labels = []
+
+    assistant_token = tokenizer.encode(
+        "<|assistant|>",
+        add_special_tokens=False
+    )
+
+    for input_ids in tokens["input_ids"]:
+        label = input_ids.copy()
+
+        start_idx = None
+        for i in range(len(label) - len(assistant_token)):
+            if label[i:i+len(assistant_token)] == assistant_token:
+                start_idx = i + len(assistant_token)
+                break
+
+        if start_idx is not None:
+            label[:start_idx] = [-100] * start_idx
+        else:
+            label = [-100] * len(label)
+
+        labels.append(label)
+
+    tokens["labels"] = labels
+    return tokens
+
+train_tokenized = train_data.map(
+    tokenize_function,
+    batched=True,
+    remove_columns=train_data.column_names
+)
+
+val_tokenized = val_data.map(
+    tokenize_function,
+    batched=True,
+    remove_columns=val_data.column_names
+)
+
+print("Tokenized Train:", len(train_tokenized))
+print("Tokenized Val:", len(val_tokenized))
+
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    dtype=torch.bfloat16,
+    device_map="auto"
+)
+
+model.gradient_checkpointing_enable()
+
+lora_config = LoraConfig(
+    r=8,
+    lora_alpha=16,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM"
+)
+
+model = get_peft_model(model, lora_config)
+model.print_trainable_parameters()
+
+data_collator = DataCollatorForLanguageModeling(
+    tokenizer=tokenizer,
+    mlm=False
+)
+
+training_args = TrainingArguments(
+    output_dir="./llama3_lora_task",
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=2,
+    num_train_epochs=3,
+    learning_rate=2e-4,
+    bf16=True,
+    logging_steps=50,
+    save_steps=500,
+    save_total_limit=2,
+    report_to="none"
+)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_tokenized,
+    eval_dataset=val_tokenized,
+    data_collator=data_collator
+)
+
+trainer.train()
+
+trainer.save_model("./llama3_lora_task/final")
+tokenizer.save_pretrained("./llama3_lora_task/final")
+
+print(" Görev odaklı LoRA fine-tune tamamlandı.")
