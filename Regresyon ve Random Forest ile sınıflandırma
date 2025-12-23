@@ -1,0 +1,165 @@
+import json
+import numpy as np
+from sklearn.preprocessing import LabelEncoder, StandardScaler #verileri standartlaştırma
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer#metin verisni sayısal vektöre dönüştürür
+from sklearn.compose import ColumnTransformer #farklı sütuna farklı işlemler
+from sklearn.pipeline import Pipeline #işlemeyi tek zincirde yapar
+from sklearn.ensemble import RandomForestClassifier #genelleme yeteneği+sınıflandırma işlemleri
+from sklearn.metrics import accuracy_score, classification_report #accuracy,precision,recall,f1 gibi metrikler
+
+with open("llama_dataset.json", "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+rows = []
+for item in data:
+    rows.append({
+        "baslik": item.get("baslik", "").lower(),
+        "tarif": item.get("yapilis_tarifi", "").lower(),
+        "malzeme": item.get("malzemeler", "").lower(),
+        "sure": item.get("pisirme_suresi_dk", None),
+        "kalori": item.get("tahmini_kalori", None)
+    })
+X_raw = [] #model girdisi
+y_kategori = [] #modelin cevabı
+y_kalori = [] #ayrı bir hedef
+
+for item in rows:
+    title = item["baslik"]
+    tarif_text = item["tarif"]
+    malzeme_text = item["malzeme"]
+
+    # kategori
+    if any(k in title for k in ["salata"]) or any(k in tarif_text for k in ["zeytinyağı", "limon", "yeşil"]):
+        y_kategori.append("salata")
+
+    elif any(k in title for k in ["çorba"]) or any(k in tarif_text for k in ["kaynat", "su", "tencere"]):
+        y_kategori.append("çorba")
+
+    elif any(k in title for k in ["tatlı", "tatli"]) or any(k in tarif_text for k in ["şeker", "krema", "çikolata"]):
+        y_kategori.append("tatli")
+
+    else:
+        y_kategori.append("yemek")
+
+    # süre
+    sure = item["sure"]
+    if sure is None:
+        sure = np.nan
+    elif isinstance(sure, str):
+        sure = sure.replace(" dk", "").replace("dakika", "").strip()
+        try:
+            sure = float(sure)
+        except:
+            sure = np.nan
+
+    # numeric
+    malzeme_sayisi = len(malzeme_text.split())
+    tarif_uzunlugu = len(tarif_text.split())
+    seker_var = 1 if "şeker" in tarif_text else 0
+
+    X_raw.append([title, tarif_text, malzeme_text, sure, malzeme_sayisi, tarif_uzunlugu, seker_var])
+
+    # kalori
+    kal = item["kalori"]
+    if kal is None or kal == "" or kal == "belirtilmemiş":
+        y_kalori.append(np.nan)
+    else:
+        try:
+            y_kalori.append(float(kal))
+        except:
+            y_kalori.append(np.nan)
+
+import pandas as pd
+df = pd.DataFrame(X_raw, columns=["baslik", "tarif", "malzeme", "sure", "malzeme_sayisi", "tarif_uzunlugu", "seker_var"])
+
+mean_sure = df["sure"].mean(skipna=True)
+df["sure"] = df["sure"].fillna(mean_sure) #ortalama ile dolduruldu
+
+unique, counts = np.unique(y_kategori, return_counts=True)
+threshold = 10 
+rare_classes = [u for u, c in zip(unique, counts) if c < threshold]
+
+y_kategori = ["OTHER" if c in rare_classes else c for c in y_kategori]
+#fake kalori değerleri eklendi
+baz_deger = {
+    "tatli": 450,
+    "yemek": 350,
+    "çorba": 200,
+    "salata": 150,
+    "OTHER": 300 
+}
+noise = 50
+y_kalori_fake = []
+for i, cat in enumerate(y_kategori):
+    if np.isnan(y_kalori[i]):
+        base = baz_deger.get(cat, 300)
+        sapma = np.random.randint(-noise, noise)
+        y_kalori_fake.append(base + sapma)
+    else:
+        y_kalori_fake.append(y_kalori[i])
+
+le = LabelEncoder()
+y_encoded = le.fit_transform(y_kategori)
+
+X = df
+y = y_encoded
+
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X, y, test_size=0.3, random_state=42, stratify=y
+)
+
+X_val, X_test, y_val, y_test = train_test_split(
+    X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp
+)
+
+text_features = ["baslik", "tarif"]
+numeric_features = ["sure", "malzeme_sayisi", "tarif_uzunlugu", "seker_var"]
+
+preprocess = ColumnTransformer(
+    transformers=[
+        ("tfidf", TfidfVectorizer(max_features=4000, ngram_range=(1,2)), "baslik"),
+        ("tfidf2", TfidfVectorizer(max_features=4000, ngram_range=(1,2)), "tarif"),
+        ("num", StandardScaler(), numeric_features) #sayısalları standartlaştırır
+    ]
+)
+model = RandomForestClassifier(
+    n_estimators=500, #500 ağaç kullanıldı
+    class_weight={ #veri dengesi için önemli
+        0: 1.0,   # salata
+        1: 1.8,   # tatli -> boost
+        2: 1.2,   # yemek
+        3: 1.0    # çorba
+    },
+    min_samples_leaf=2, #her yaprakta en az 2 örnek olmalı
+    random_state=42
+)
+
+pipe = Pipeline([
+    ("prep", preprocess),
+    ("clf", model)
+])
+
+pipe.fit(X_train, y_train)
+pred_val = pipe.predict(X_val)
+pred_test = pipe.predict(X_test)
+
+val_acc = accuracy_score(y_val, pred_val)
+test_acc = accuracy_score(y_test, pred_test)
+
+print(f"\nValidation Accuracy: {val_acc:.3f}")
+print(f"Test Accuracy: {test_acc:.3f}\n")
+
+print(classification_report(y_test, pred_test, target_names=le.classes_))
+
+print("\n--- Örnek tahminler ---")
+for i in range(10):
+    p = pipe.predict(X_test.iloc[[i]])[0]
+    gerçek = le.inverse_transform([y_test[i]])[0]
+    tahmin = le.inverse_transform([p])[0]
+    print(gerçek, "|", tahmin)
+
+print("\n Fake kalori örnekleri ")
+y_kalori_fake = np.array(y_kalori_fake)
+for i in range(10):
+    print(f"{i:03d} -> {y_kalori_fake[i]}")
