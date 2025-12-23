@@ -1,0 +1,56 @@
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+
+MODEL_DIR = "./llama3_lora_task/final"  # LoRA fine-tune edilmiş modelin yolu
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_DIR,
+    device_map="auto",
+    dtype=torch.bfloat16  # torch_dtype yerine dtype kullan
+)
+generator = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    max_new_tokens=200,
+    temperature=0.7,
+    top_p=0.9,
+    do_sample=True
+)
+
+def generate_reply(meal_name: str, cook_time=30, ingredients=20, word_count=35, task="Kategoriyi ve kaloriyi tahmin et."):
+    """
+    meal_name: yemek adı
+    cook_time: pişirme süresi (dakika)
+    ingredients: malzeme sayısı
+    word_count: tarif uzunluğu (kelime)
+    task: modelin yanıtlaması gereken görev
+    """
+    prompt = f"""<|user|>
+Pişirme süresi: {cook_time} dakika
+Malzeme sayısı: {ingredients}
+Tarif uzunluğu: {word_count} kelime
+Görev: {task}
+<|assistant|>"""
+
+    output = generator(prompt)[0]["generated_text"]
+    # Sadece <|assistant|> sonrası kısmı al
+    assistant_reply = output.split("<|assistant|>")[-1].strip()
+    return assistant_reply
+
+print("Test Cevabı:\n", generate_reply("kuru fasulye", cook_time=60, ingredients=15, word_count=40))
+
+print("\n--- Multi-task Chatbot Başladı (çıkmak için 'çık') ---\n")
+while True:
+    user_input = input("Yemek adı: ")
+    if user_input.lower() in ["çık", "exit", "quit"]:
+        break
+
+    reply = generate_reply(
+        meal_name=user_input,
+        cook_time=30,       # default değer, dilersen kullanıcıdan alabilirsin
+        ingredients=20,     # default
+        word_count=35       # default
+    )
+    print("Model:", reply)
