@@ -1,0 +1,89 @@
+import json, re, torch
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+
+model_name = r"C:\models\byt5-turkish"
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+dtype = torch.float16 if device == "cuda" else torch.float32
+print(f" Model cihazı: {device.upper()} (dtype={dtype})")
+
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name, torch_dtype=dtype).to(device)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+spell_check = pipeline(
+    "text2text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    device=0 if device == "cuda" else -1
+)
+
+def turkce_duzelt_batch(metin_listesi, batch_size=16):
+    """Metinleri GPU'da batch olarak düzelt"""
+    duzeltilmis = []
+    for i in range(0, len(metin_listesi), batch_size):
+        batch = metin_listesi[i:i + batch_size]
+        try:
+            outputs = spell_check(batch, max_length=512, truncation=True)
+            duzeltilmis.extend([o["generated_text"] for o in outputs])
+        except Exception as e:
+            print(f"Batch {i} hata verdi: {e}")
+            duzeltilmis.extend(batch)
+    return duzeltilmis
+
+txt_path = r"C:\Users\eslem\OneDrive\Dokument\hesaplamaTeorisi\forDataSet\text dosyaları\3000_Yemek_Tarifi.txt"
+json_path = r"C:\Users\eslem\OneDrive\Dokument\hesaplamaTeorisi\forDataSet\temizlenmişDataSetler\3000Tarif_TURBO_GPU.json"
+
+with open(txt_path, "r", encoding="utf-8") as f:
+    text = f.read()
+
+pattern = re.compile(
+    r"(?P<baslik>[A-ZÇĞİÖŞÜa-zçğıöşü\s]+?)\s*-\s*\d+\s*"
+    r"(?:Mutfak:\s*(?P<mutfak>[A-Za-zÇĞİÖŞÜçğıöşü\s]+))?"
+    r"\s*Süre[:\s]*?(?P<sure>[\d]+(?:\s*dk|-Fazla)?)"
+    r".*?MALZEMELER\s+(?P<malzeme>.*?)\s+YAPILIŞ\s*TARİFİ\s+(?P<yapilis>.*?)(?=(?:[A-ZÇĞİÖŞÜa-zçğıöşü\s]+?\s*-\s*\d+)|$)",
+    re.S
+)
+matches = list(pattern.finditer(text))
+print(f" Toplam {len(matches)} tarif bulundu. GPU ile işlem başlıyor...")
+
+basliklar, yapilislar, malzeme_listesi, mutfaklar, sureler = [], [], [], [], []
+
+for m in matches:
+    basliklar.append(m.group("baslik").strip())
+    yapilislar.append(re.sub(r"\s+", " ", m.group("yapilis")).strip())
+
+    malzeme_raw = re.sub(r"(\d+)\s*\n\s*(\w)", r"\1 \2", m.group("malzeme"))
+    malzemeler = [x.strip() for x in re.split(r"\s{2,}|\n", malzeme_raw) if len(x.strip()) > 2]
+    malzeme_listesi.append(malzemeler)
+
+    mutfak = (m.group("mutfak") or "Bilinmiyor").strip()
+    mutfaklar.append(mutfak)
+
+    sure = int(re.sub(r"[^0-9]", "", m.group("sure") or "0"))
+    sureler.append(sure)
+
+baslik_duzelt = turkce_duzelt_batch(basliklar)
+
+yapilis_duzelt = turkce_duzelt_batch(yapilislar)
+
+flat_malzeme = [m for grup in malzeme_listesi for m in grup]
+duz_malzeme = turkce_duzelt_batch(flat_malzeme)
+index, malzeme_duzelt = 0, []
+for grup in malzeme_listesi:
+    malzeme_duzelt.append(duz_malzeme[index:index + len(grup)])
+    index += len(grup)
+
+data = []
+for i in range(len(baslik_duzelt)):
+    data.append({
+        "baslik": baslik_duzelt[i],
+        "mutfak": mutfaklar[i],
+        "pisirme_suresi_dk": sureler[i],
+        "malzemeler": malzeme_duzelt[i],
+        "yapilis_tarifi": yapilis_duzelt[i]
+    })
+
+with open(json_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=4)
+
+print(f"{len(data)} tarif düzeltildi ve '{json_path}' dosyasına kaydedildi.")
